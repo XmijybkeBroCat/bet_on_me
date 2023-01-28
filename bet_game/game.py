@@ -1,262 +1,194 @@
-from collections.abc import Iterable as _Iterable
-import numpy as _np
-import math as _math
-
-from .player import Player
-from . import utils as _utils
+from .player import PlayerManager
+from .song  import *
+from .quest import QuestPool
+from .utils import GameplayError
+from functools import cmp_to_key
 
 class Game:
     STATUS_000_UNAVAILABLE = 0
-    STATUS_100_DRAW_QUEST = 100
-    STATUS_101_BET = 101
-    STATUS_102_PLAY = 102
-    STATUS_103_EVALUATE_SCORE = 103
-    STATUS_104_EVALUATE_BET = 104
+    STATUS_100_DRAW_EVENT = 101
+    STATUS_101_DRAW_QUEST = 100
+    STATUS_102_BET = 101
+    STATUS_103_PLAY = 102
+    STATUS_104_EVALUATE_SCORE = 103
+    STATUS_105_EVALUATE_BET = 104
     STATUS_200_FINISHED = 200
 
-    def __init__(self):
-        self.members = {}
-        self.quest_pool = []
-        self.clear()
-
-    def clear(self):
-        self.turns = 0
-        self.current_quest = None
-        self.playing_player_num = None
-        self.status = self.STATUS_000_UNAVAILABLE
-        self.__log = []
-
-    def log(self, info : str):
-        self.__log.append(info)
-
-    @property
-    def history(self):
-        return '\n'.join(self.__log)
-
-    def enroll(self, player : Player):
-        if self.current_quest is not None:
-            raise _utils.GameplayError('Cannot enroll when a quest is active')
-        self.members[player.id] = player
-
-    def add_quest(self, quest):
-        if isinstance(quest, _Iterable):
-            self.quest_pool.extend(quest)
+    def __init__(self, game_type='arcaea', turns=5):
+        if game_type == "arcaea":
+            self.song_manager = ArcaeaSongPackageManager()
+        elif game_type == "phigros":
+            self.song_manager = PhigrosSongPackageManager()
         else:
-            self.quest_pool.append(quest)
-
-    def start(self, turns):
-        self.turns = turns
-        self.status = self.STATUS_100_DRAW_QUEST
-        self.log(f'Starting game with {turns} turns.')
-
-    def check_status(self, status):
-        if self.status != status:
-            raise _utils.GameplayError(f'Invalid operation. The current status is {self.status}')
+            raise GameplayError("Currently Only Support arcaea and phigros")
+        self.__play_manager = PlayerManager()
+        self.__quest_pool = QuestPool()
+        self.__turns = turns
+        self.reset_round(turns)
 
     @property
     def finished(self):
-        return self.status == self.STATUS_200_FINISHED
+        return self.__status == self.STATUS_200_FINISHED
+
+    @property
+    def winner(self):
+        if not self.__winner is None:
+            return self.__winner
+        if self.__status == self.STATUS_200_FINISHED:
+            max_score = None
+            for player in self.__play_manager.player_list:
+                if max_score is None or player.score > max_score:
+                    max_score = player.score
+
+            winner = ""
+            for player in self.__play_manager.player_list:
+                if player.score == max_score:
+                    winner = winner + player.id + ", "
+            self.__winner = winner[:-2]
+            return self.__winner
+        else:
+            return ""
+
+    def reset_round(self, turn):
+        self.__turns = turn
+        self.__winner = None
+        self.__current_quest = None
+        self.__status = self.STATUS_000_UNAVAILABLE
+        self.__play_manager.reset_round()
+        self.reset_turn()
+
+    def reset_turn(self):
+        self.__play_manager.reset_turn()
+        self.__current_quest = None
+        self.__bet_num = 0
+        self.__gameplay_num = 0
+
+    def log(self, s:str):
+        pass
+
+    # helper function
+    def check_status(self, status):
+        if self.__status != status:
+            raise GameplayError(f'Invalid operation. The current status is {self.__status}')
+
+    # player and init
+    def enroll(self, id:str):
+        self.__play_manager.add_player(id)
+
+    def remove(self, id:str):
+        self.__play_manager.remove_player(id)
+
+    def add_quest(self, quest_list:list):
+        cur_quest_list = self.song_manager.add_quest_list(quest_list)
+        self.__quest_pool.set_quest_list(cur_quest_list)
+
+    def enable(self, pac:str):
+        self.song_manager.enable(pac)
+
+    def disable(self, pac:str):
+        self.song_manager.disable(pac)
+
+    # game play
+    def start(self):
+        self.player_num = self.__play_manager.player_num
+        self.__status = self.STATUS_100_DRAW_EVENT
+        self.log(f'Starting game with {self.__turns} turns.')
+
+    def draw_event(self):
+        if self.__status != self.STATUS_101_DRAW_QUEST:
+            self.check_status(self.STATUS_100_DRAW_EVENT)
+
+        self.__status = self.STATUS_101_DRAW_QUEST
 
     def draw_quest(self):
-        if self.status == self.STATUS_101_BET:
-            if self.playing_player_num != len(self.members):
-                raise _utils.GameplayError(f'Cannot redraw quests. Some players have already bet')
+        if self.__status == self.STATUS_102_BET:
+            if self.__bet_num > 0:
+                raise GameplayError(f'Cannot redraw quests. Some players have already bet')
             redraw = True
         else:
-            self.check_status(self.STATUS_100_DRAW_QUEST)
+            self.check_status(self.STATUS_101_DRAW_QUEST)
             redraw = False
 
-        weights = _np.array([q.weight for q in self.quest_pool])
-        total_pool_size = len(self.quest_pool)
-        total_weights = weights.sum()
-        p = weights / total_weights
-        indexes = _np.arange(0, total_pool_size, dtype=_np.int_)
-        rolled = _np.random.choice(indexes, 1, replace=False, p=p).item()
-        self.current_quest = self.quest_pool[rolled]
-        self.playing_player_num = len(self.members)
-
-        self.status = self.STATUS_101_BET
+        self.__current_quest = self.__quest_pool.draw_quest()
+        self.__status = self.STATUS_102_BET
 
         if redraw:
-            self.log(f'Redrawing quest: {self.current_quest.description}.')
+            self.log(f'Redrawing quest: {self.__current_quest.description}.')
         else:
-            self.log(f'{self.turns} turn{"s" if self.turns > 1 else ""} left. Drawing quest: {self.current_quest.description}.')
-        return self.current_quest
-
-    @property
-    def decrease_score_value(self):
-        return len(self.members) // 2
-
-    def decrease_score(self, player_id):
-        self.check_status(self.STATUS_101_BET)
-        if not player_id in self.members:
-            raise _utils.GameplayError(f'Invalid player ID: {player_id}')
-        player = self.members[player_id]
-        if player.score_decreased:
-            raise _utils.GameplayError(f'The score is already decreased')
-        player.score_decreased = True
-        self.log(f'Player {player.id} voluntarily decreases the score by {self.decrease_score_value} points.')
+            self.log(f'{self.__turns} turn{"s" if self.__turns > 1 else ""} left. Drawing quest: {self.__current_quest.description}.')
 
     def bet(self, player_id, bet_id, stake=1):
-        self.check_status(self.STATUS_101_BET)
+        self.check_status(self.STATUS_102_BET)
+        player = self.__play_manager.find_player(player_id)
+        if not player.took_bet:
+            if bet_id:
+                bet_player = self.__play_manager.find_player(bet_id)
+                if (bet_player.id == player.id):
+                    raise GameplayError(f'Cannoe bet oneself: {bet_player.id}')
+            player.took_bet = True
+            self.__bet_num += 1
 
-        if not player_id in self.members:
-            raise _utils.GameplayError(f'Invalid player ID: {player_id}')
-        player = self.members[player_id]
-        if player.bet is not None:
-            raise _utils.GameplayError(f'Already bet')
-        if bet_id is None:
-            # No betting
-            player.bet = player_id
-            player.stake = 0
-            self.playing_player_num -= 1
-            if self.playing_player_num <= 0:
-                self.playing_player_num = len(self.members)
-                self.status = self.STATUS_102_PLAY
-            self.log(f'Player {player.id} bets nothing.')
-            return
-        if not bet_id in self.members:
-            raise _utils.GameplayError(f'Invalid player ID: {bet_id}')
-        if player_id == bet_id:
-            raise _utils.GameplayError(f'Cannot bet self')
-        stake = max(min(int(stake), self.max_stake), 1)
-        player.bet = bet_id
-        player.stake = stake
-        self.playing_player_num -= 1
-        if self.playing_player_num <= 0:
-            self.playing_player_num = len(self.members)
-            self.status = self.STATUS_102_PLAY
+        player.bet_id = bet_id
+        if bet_id:
+            player.stake = min(max(stake, self.player_num), 1)
+
+        if self.__bet_num == self.player_num:
+            self.__status = self.STATUS_103_PLAY
         self.log(f'Player {player.id} bets {stake} point{"s" if stake > 1 else ""} on {bet_id}.')
 
-    def play(self, player_id, scores : _np.ndarray):
-        self.check_status(self.STATUS_102_PLAY)
-
-        if not isinstance(scores, _Iterable):
-            scores = [scores]
-        scores = _utils.check_ndarray(scores)
-
-        if not player_id in self.members:
-            raise _utils.GameplayError(f'Invalid player ID: {player_id}')
-        player = self.members[player_id]
-        if player.current_value is not None:
-            raise _utils.GameplayError(f'The player (ID {player_id}) has already completed the quest')
-        value = self.current_quest.evaluator(scores)
-        if isinstance(value, _np.ndarray):
-            if not value.size == 1:
-                raise _utils.GameplayError(f'Invalid evaluated score: {value}')
-            value = value.item()
-        player.current_value = value
-        self.playing_player_num -= 1
-        if self.playing_player_num <= 0:
-            self.playing_player_num = 0
-            self.status = self.STATUS_103_EVALUATE_SCORE
-        self.log(f'Player {player.id} plays the quest with score "{scores}".')
-
-    def consume(self, player_id, score=None):
-        self.check_status(self.STATUS_102_PLAY)
-
-        if not player_id in self.members:
-            raise _utils.GameplayError(f'Invalid player ID: {player_id}')
-        if score is None:
-            score = self.decrease_score_value
-        player = self.members[player_id]
-        if player.score < score:
-            raise _utils.GameplayError(f'Player {player_id} does not have enough score')
-        player.score -= score
-
-        self.log(f'Player {player.id} consumes {score} point{"s" if score > 1 else ""}.')
-
-    @property
-    def score_baseline(self):
-        n = len(self.members)
-        return _math.floor(n / 2)
-
-    @property
-    def max_stake(self):
-        return len(self.members)
+    def play(self, player_id, score):
+        self.check_status(self.STATUS_103_PLAY)
+        player = self.__play_manager.find_player(player_id)
+        self.__play_manager.set_score(player, score)
+        
+        if not player.played:
+            player.played = True
+            self.__gameplay_num += 1
+        
+        if self.__gameplay_num == self.player_num:
+            self.__status = self.STATUS_104_EVALUATE_SCORE
+        self.log(f'Player {player.id} plays the quest with score "{score}".')
 
     def evaluate_score(self):
-        self.check_status(self.STATUS_103_EVALUATE_SCORE)
-
-        members = sorted(self.members.values(), reverse=False)
-        rankings = list(range(len(members)))
-
-        baseline = self.score_baseline
-
-        for index, player in reversed(list(enumerate(members))):
-            if index < len(members) - 1 and members[index] == members[index + 1]:
-                rankings[index] = rankings[index + 1]
-            ranking = rankings[index]
-            score = max(ranking + 1 - baseline, 0)
-            player.score += score
-            if player.score_decreased:
-                player.score -= self.decrease_score_value
-            if player.bet is not None and player.bet != player.id:
-                self.members[player.bet].score -= 1
-
-        self.status = self.STATUS_104_EVALUATE_BET
-
+        self.check_status(self.STATUS_104_EVALUATE_SCORE)
+        self.__play_manager.evaluate_playing_score()
         self.log(str(self))
+        self.__status = self.STATUS_105_EVALUATE_BET
 
     def evaluate_bet(self):
-        self.check_status(self.STATUS_104_EVALUATE_BET)
-
-        members = sorted(self.members.values(), key=lambda x: x.score, reverse=True)
-        top_score = members[0].score
-        top_id = members[0].id
-        second_top_score = members[1].score
-
-        delta_score = [0 for i in range(len(members))]
-        player_index = {x.id : i for i, x in enumerate(members)}
-        for index, player in enumerate(members):
-            bet = player.bet
-            if bet is None:
-                delta_score[index] += 0
-            else:
-                #if top_id == player.id:
-                #    _top_score = second_top_score
-                #else:
-                #    _top_score = top_score
-                _top_score = top_score
-                bet_player = self.members[bet]
-                if bet_player.score == _top_score:
-                    delta_score[index] += player.stake
-                    #delta_score[player_index[bet]] -= 1
-                else:
-                    delta_score[index] -= player.stake
-        for index, player in enumerate(members):
-            player.score += delta_score[index]
-            player.reset_turn()
-        self.turns -= 1
-        self.current_quest = None
-        self.playing_player_num = None
-        if self.turns <= 0:
-            self.status = self.STATUS_200_FINISHED
-        else:
-            self.status = self.STATUS_100_DRAW_QUEST
-
+        self.check_status(self.STATUS_105_EVALUATE_BET)
+        self.__play_manager.evaluate_bet_score()
         self.log(str(self))
+        self.__turns -= 1
+        self.reset_turn()
+        if self.__turns <= 0:
+            self.__status = self.STATUS_200_FINISHED
+        else:
+            self.__bet_num = 0
+            self.__gameplay_num = 0
+            self.__status = self.STATUS_101_DRAW_QUEST
 
     def __str__(self):
-        turn = f'{self.turns} turn{"s" if self.turns > 1 else ""} left.\n'
+        turn = f'{self.__turns} turn{"s" if self.__turns > 1 else ""} left.\n'
 
         head = ''
-        if self.status == self.STATUS_100_DRAW_QUEST:
+        if self.__status == self.STATUS_101_DRAW_QUEST:
             head = f'Drawing the next quest.\n'
-        elif self.status == self.STATUS_101_BET:
-            head = f'The quest is {self.current_quest.description}. Players are betting.\n'
-        elif self.status == self.STATUS_102_PLAY:
-            head = f'Playing {self.current_quest.description}.\n'
-        elif self.status == self.STATUS_103_EVALUATE_SCORE:
-            head = f'Evaluating scores of {self.current_quest.description}.\n'
-        elif self.status == self.STATUS_104_EVALUATE_BET:
+        elif self.__status == self.STATUS_102_BET:
+            head = f'The quest is {self.__current_quest.description}. Players are betting.\n'
+        elif self.__status == self.STATUS_103_PLAY:
+            head = f'Playing {self.__current_quest.description}.\n'
+        elif self.__status == self.STATUS_104_EVALUATE_SCORE:
+            head = f'Evaluating scores of {self.__current_quest.description}.\n'
+        elif self.__status == self.STATUS_105_EVALUATE_BET:
             head = f'Evaluating bet results.\n'
-        if self.status == self.STATUS_104_EVALUATE_BET:
+        if self.__status == self.STATUS_105_EVALUATE_BET:
             player_infos = [
-                f'{player} (result: {player.current_value}){" (decreased)" if player.score_decreased else ""} {"betting " + str(player.stake) + " point" + ("s" if player.stake > 1 else "") + " on " + player.bet if player.bet != player.id else "not betting"}'
-                for player in sorted(self.members.values(), key=lambda x: x.current_value, reverse=True)
+                f'{player} (result: {player.playing_score}) {"bets " + str(player.stake) + " point(s) on " + player.bet_id if player.bet_id else "not betting"}'
+                for player in sorted(self.__play_manager.player_list, reverse=True,
+                    key=cmp_to_key(self.__play_manager.ranking_cmp))
             ]
         else:
-            player_infos = [f'{player}' for player in self.members.values()]
+            player_infos = [f'{player}' for player in self.__play_manager.player_list]
         player_infos_str = '\n'.join(player_infos)
         return f'{turn}{head}{player_infos_str}'

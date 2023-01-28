@@ -1,4 +1,4 @@
-from bet_game.quest_generator.phigros import song_package_manager, phigros_score
+from bet_game.song_package.phigros import song_package_manager, phigros_score
 from bet_game import Game, Player
 
 song_package_manager.enable_all()
