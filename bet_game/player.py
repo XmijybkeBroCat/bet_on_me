@@ -16,6 +16,7 @@ class Player:
         self.bet_id = None
         self.bet_score = None
         self.betted = None
+        self.bet_reward = None
 
         self.played = False
         self.playing_score = None
@@ -30,6 +31,11 @@ class Player:
             return f'{self.id} ({self.score+self.betted-self.cur_pt}+{self.cur_pt}-{self.betted}={self.score})'
         elif not self.cur_pt is None:
             return f'{self.id} ({self.score-self.cur_pt}+{self.cur_pt}={self.score})'
+        elif not self.bet_reward is None:
+            if self.bet_reward < 0:
+                return f'{self.id} ({self.score-self.bet_reward}-{-self.bet_reward}={self.score})'
+            else:
+                return f'{self.id} ({self.score-self.bet_reward}+{self.bet_reward}={self.score})'
         else:
             return f'{self.id} ({self.score})'
     
@@ -54,6 +60,7 @@ class PlayerManager:
             player.reset_turn()
         self.betted_decrease = True
         self.bet_failed_decrease = True
+        self.double_reward = False
         self.set_score = self.default_set_score
         self.ranking_cmp = self.default_ranking_cmp
         self.rank_to_score = self.default_rank_to_score
@@ -88,16 +95,19 @@ class PlayerManager:
         player.playing_score = score
 
     def default_ranking_cmp(self, a:Player, b:Player):
-        if a.playing_score != b.playing_score:
+        if not a.rank is None and not b.rank is None and a.rank != b.rank:
+            return b.rank - a.rank
+        elif a.playing_score != b.playing_score:
             return a.playing_score - b.playing_score
         elif a.score != b.score:
             return b.score - a.score
         else:
-            return 1
+            return a.id > b.id
 
     def default_rank_to_score(self, member):
         pt = (len(member)+1)//2
-        for player in member:
+        for i, player in enumerate(member):
+            player.rank = i
             player.cur_pt = pt
             player.score += pt
             if pt > 0:
@@ -105,6 +115,8 @@ class PlayerManager:
 
     # evaluate function
     def evaluate_playing_score(self):
+        self.player_list = sorted(self.player_list, reverse=True, 
+            key=cmp_to_key(self.ranking_cmp))
         if self.betted_decrease:
             for player in self.player_list:
                 if player.bet_id:
@@ -114,8 +126,6 @@ class PlayerManager:
                         bet_player.betted = 1
                     else:
                         bet_player.betted += 1
-        self.player_list = sorted(self.player_list, reverse=True, 
-            key=cmp_to_key(self.ranking_cmp))
         self.rank_to_score(self.player_list)
         
     def evaluate_bet_score(self):
@@ -127,11 +137,16 @@ class PlayerManager:
             if player.bet_id:
                 bet_player = self.find_player(player.bet_id)
                 if bet_player.score == max_score:
-                    score_list[i] = player.stake
+                    if self.double_reward:
+                        score_list[i] = player.stake * 2
+                    else:
+                        score_list[i] = player.stake
                 elif self.bet_failed_decrease:
                     score_list[i] = -player.stake
 
         for i, player in enumerate(self.player_list):
+            
+            player.bet_reward = score_list[i]
             player.score += score_list[i]
         
         self.player_list = sorted(self.player_list, reverse=True)
@@ -157,7 +172,6 @@ if __name__ == '__main__':
     print(playerManager.find_player("aa"))  # aab(0)
     playerManager.remove_player("aa")       # delete aab
     print(len(playerManager.player_list))   # 2
-
 
     print(playerManager.find_player("ab"))  # abb(0)
     print(playerManager.find_player("b"))   # bcc(0)

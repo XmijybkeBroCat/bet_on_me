@@ -43,9 +43,7 @@ class PhigrosQuestInfo(QuestInfo):
         weight: float,
         song: dict,
     ):
-        level = song['level']
-        level_name = str(int(level))
-
+        level_name = str(song['level'])
         difficulty_name = song['difficulty'].upper()
 
         song_name = song['name']

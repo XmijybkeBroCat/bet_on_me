@@ -1,20 +1,21 @@
 from .player import PlayerManager
 from .song  import *
 from .quest import QuestPool
+from .event import RandomEvent
 from .utils import GameplayError
 from functools import cmp_to_key
 
 class Game:
     STATUS_000_UNAVAILABLE = 0
-    STATUS_100_DRAW_EVENT = 101
-    STATUS_101_DRAW_QUEST = 100
-    STATUS_102_BET = 101
-    STATUS_103_PLAY = 102
-    STATUS_104_EVALUATE_SCORE = 103
-    STATUS_105_EVALUATE_BET = 104
+    STATUS_100_DRAW_EVENT = 100
+    STATUS_101_DRAW_QUEST = 101
+    STATUS_102_BET = 102
+    STATUS_103_PLAY = 103
+    STATUS_104_EVALUATE_SCORE = 104
+    STATUS_105_EVALUATE_BET = 105
     STATUS_200_FINISHED = 200
 
-    def __init__(self, game_type='arcaea', turns=5):
+    def __init__(self, game_type='arcaea', turns=5, random_p=0.5):
         if game_type == "arcaea":
             self.song_manager = ArcaeaSongPackageManager()
         elif game_type == "phigros":
@@ -24,6 +25,7 @@ class Game:
         self.__play_manager = PlayerManager()
         self.__quest_pool = QuestPool()
         self.__turns = turns
+        self.__random_event = RandomEvent(self.__play_manager, game_type=game_type, random_p=random_p)
         self.reset_round(turns)
 
     @property
@@ -82,6 +84,18 @@ class Game:
         cur_quest_list = self.song_manager.add_quest_list(quest_list)
         self.__quest_pool.set_quest_list(cur_quest_list)
 
+    def enable_all(self, en_package=True, en_difficulties=True):
+        if en_package:
+            self.song_manager.enable_all_packages()
+        if en_difficulties:
+            self.song_manager.enable_all_difficulties()
+
+    def disable_all(self, dis_package=True, dis_difficulties=True):
+        if dis_package:
+            self.song_manager.disable_all_packages()
+        if dis_difficulties:
+            self.song_manager.disable_all_difficulties()
+
     def enable(self, pac:str):
         self.song_manager.enable(pac)
 
@@ -95,9 +109,8 @@ class Game:
         self.log(f'Starting game with {self.__turns} turns.')
 
     def draw_event(self):
-        if self.__status != self.STATUS_101_DRAW_QUEST:
-            self.check_status(self.STATUS_100_DRAW_EVENT)
-
+        self.check_status(self.STATUS_100_DRAW_EVENT)
+        self.__random_event.draw_event()
         self.__status = self.STATUS_101_DRAW_QUEST
 
     def draw_quest(self):
@@ -105,6 +118,7 @@ class Game:
             if self.__bet_num > 0:
                 raise GameplayError(f'Cannot redraw quests. Some players have already bet')
             redraw = True
+            self.__quest_pool.remove_quest(self.__current_quest)
         else:
             self.check_status(self.STATUS_101_DRAW_QUEST)
             redraw = False
@@ -118,7 +132,12 @@ class Game:
             self.log(f'{self.__turns} turn{"s" if self.__turns > 1 else ""} left. Drawing quest: {self.__current_quest.description}.')
 
     def bet(self, player_id, bet_id, stake=1):
-        self.check_status(self.STATUS_102_BET)
+        if self.__status == self.STATUS_103_PLAY:
+            if self.__gameplay_num != 0:
+                raise GameplayError(f'Cannot re-bet. Some players have already played')
+        else:
+            self.check_status(self.STATUS_102_BET)
+    
         player = self.__play_manager.find_player(player_id)
         if not player.took_bet:
             if bet_id:
@@ -130,14 +149,15 @@ class Game:
 
         player.bet_id = bet_id
         if bet_id:
-            player.stake = min(max(stake, self.player_num), 1)
+            player.stake = max(min(stake, self.player_num), 1)
 
         if self.__bet_num == self.player_num:
             self.__status = self.STATUS_103_PLAY
         self.log(f'Player {player.id} bets {stake} point{"s" if stake > 1 else ""} on {bet_id}.')
 
     def play(self, player_id, score):
-        self.check_status(self.STATUS_103_PLAY)
+        if (self.__status != self.STATUS_104_EVALUATE_SCORE):
+            self.check_status(self.STATUS_103_PLAY)
         player = self.__play_manager.find_player(player_id)
         self.__play_manager.set_score(player, score)
         
@@ -151,9 +171,9 @@ class Game:
 
     def evaluate_score(self):
         self.check_status(self.STATUS_104_EVALUATE_SCORE)
-        self.__play_manager.evaluate_playing_score()
-        self.log(str(self))
         self.__status = self.STATUS_105_EVALUATE_BET
+        self.__play_manager.evaluate_playing_score()
+        self.log(str(self))        
 
     def evaluate_bet(self):
         self.check_status(self.STATUS_105_EVALUATE_BET)
@@ -164,14 +184,14 @@ class Game:
         if self.__turns <= 0:
             self.__status = self.STATUS_200_FINISHED
         else:
-            self.__bet_num = 0
-            self.__gameplay_num = 0
-            self.__status = self.STATUS_101_DRAW_QUEST
+            self.__status = self.STATUS_100_DRAW_EVENT
 
     def __str__(self):
         turn = f'{self.__turns} turn{"s" if self.__turns > 1 else ""} left.\n'
 
         head = ''
+        if self.__status == self.STATUS_100_DRAW_EVENT:
+            head = f'Drawing the next event.\n'
         if self.__status == self.STATUS_101_DRAW_QUEST:
             head = f'Drawing the next quest.\n'
         elif self.__status == self.STATUS_102_BET:
