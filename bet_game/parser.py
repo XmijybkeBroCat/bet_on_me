@@ -57,6 +57,8 @@ def set_arcaea_quest(level_weights:dict, songs:list, args:list):
         if isinstance(_arg2, float) or isinstance(_arg2, int):
             # set weight
             level_weights[arcaea_level(_arg1)] = max(float(_arg2), 0)
+            if level_weights[arcaea_level(_arg1)] == 0.0:
+                del(level_weights[arcaea_level(_arg1)])
         elif isinstance(_arg2, str):
             # ban song
             if _arg1 != "ban":
@@ -115,6 +117,8 @@ def set_phigros_quest(level_weights:dict, songs:list, args:list):
             # set weight (only support integer level)
             try:
                 level_weights[int(float(_arg1))] = max(float(_arg2), 0)
+                if level_weights[int(float(_arg1))] == 0.0:
+                    del(level_weights[int(float(_arg1))])
             except ValueError:
                 print(f'{_arg1} is not a valid level!')
         elif isinstance(_arg2, str):

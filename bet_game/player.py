@@ -16,7 +16,6 @@ class Player:
         self.bet_id = None
         self.bet_score = None
         self.betted = None
-        self.bet_reward = None
 
         self.played = False
         self.playing_score = None
@@ -31,11 +30,6 @@ class Player:
             return f'{self.id} ({self.score+self.betted-self.cur_pt}+{self.cur_pt}-{self.betted}={self.score})'
         elif not self.cur_pt is None:
             return f'{self.id} ({self.score-self.cur_pt}+{self.cur_pt}={self.score})'
-        elif not self.bet_reward is None:
-            if self.bet_reward < 0:
-                return f'{self.id} ({self.score-self.bet_reward}-{-self.bet_reward}={self.score})'
-            else:
-                return f'{self.id} ({self.score-self.bet_reward}+{self.bet_reward}={self.score})'
         else:
             return f'{self.id} ({self.score})'
     
@@ -61,6 +55,9 @@ class PlayerManager:
         self.betted_decrease = True
         self.bet_failed_decrease = True
         self.double_reward = False
+        self.collision = False
+        self.popular = False
+        self.patient = False
         self.set_score = self.default_set_score
         self.ranking_cmp = self.default_ranking_cmp
         self.rank_to_score = self.default_rank_to_score
@@ -91,7 +88,7 @@ class PlayerManager:
     # default evaluate function
     def default_set_score(self, player:Player, score):
         if not isinstance(score, int):
-            raise GameplayError("Score should be a integer")
+            raise GameplayError("Score should be an integer")
         player.playing_score = score
 
     def default_ranking_cmp(self, a:Player, b:Player):
@@ -145,10 +142,37 @@ class PlayerManager:
                     score_list[i] = -player.stake
 
         for i, player in enumerate(self.player_list):
-            
-            player.bet_reward = score_list[i]
             player.score += score_list[i]
         
+        if self.collision or self.popular:
+            collision_dict = {}
+            max_betted = 0
+            for i, player in enumerate(self.player_list):
+                if player.bet_id:
+                    if player.bet_id in collision_dict.keys():
+                        collision_dict[player.bet_id] += 1
+                    else:
+                        collision_dict[player.bet_id] = 1
+                    if collision_dict[player.bet_id] >= max_betted:
+                        max_betted = collision_dict[player.bet_id]
+
+            for i, player in enumerate(self.player_list):
+                if self.collision:
+                    if player.bet_id:
+                        player.score -= (collision_dict[player.bet_id]-1)
+                if self.popular:
+                    if player.id in collision_dict and collision_dict[player.id] == max_betted:
+                        player.score += 2 * collision_dict[player.id]
+
+        if self.patient:
+            min_score = None
+            for player in self.player_list:
+                if min_score is None or player.score < min_score:
+                    min_score = player.score
+            for player in self.player_list:
+                if player.score == min_score:
+                    player.score += self.player_num
+
         self.player_list = sorted(self.player_list, reverse=True)
 
     @property
