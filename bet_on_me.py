@@ -27,7 +27,7 @@ import tkinter as tk
 from random import sample
 import json
 from math import ceil
-from typing import Literal
+from typing import Literal, Union
 
 
 EVENTS = {'绝对优势': '事件抽取阶段结束后，所有玩家分数立刻取绝对值',
@@ -48,9 +48,9 @@ EVENTS = {'绝对优势': '事件抽取阶段结束后，所有玩家分数立�
 SONGS = []
 WEIGHTS = []
 song_data: dict = json.load(open('SongData.json', 'r', encoding='UTF-8'))
-for s_ in song_data.values():
-    SONGS.append(s_['difficulty'])
-    WEIGHTS.append(s_['weight'])
+for k_, v_ in song_data.items():
+    SONGS.append((k_, v_['difficulty']))
+    WEIGHTS.append(v_['weight'])
 
 
 class Start:
@@ -116,17 +116,13 @@ class Game:
         self.pl = pl  # pl = player list
         self.pn = len(pl)  # pn = player number
         self.gr = gr  # gr = game round
-        self.pts = {}
-        self.bets = {}
-        self.result = {}
-        self.report = {}
-        self.betted_count = {}
+        self.pts: dict[str, int] = {}
+        self.bets: dict[str, Union[None, (str, int)]] = {}
+        self.result: dict[str, Union[None, int, float]] = {}
+        self.report: dict[str, list[int]] = {}
+        self.betted_count: dict[str, int] = {}
         for s in self.pl:
             self.pts[s] = 0
-            self.bets[s] = (None, None)
-            self.result[s] = 0.0
-            self.report[s] = [0, 0, 0, 0, 0, 0]
-            self.betted_count[s] = 0
 
         self.nre = None  # nre = Next round event
         self.bte = None  # bte = Bet time event
@@ -196,10 +192,15 @@ class Game:
 
     def round_start(self):
         assert self.crt_step == 'Event'
+        for s in self.pl:
+            self.bets[s] = None
+            self.result[s] = None
+            self.report[s] = [0, 0, 0, 0, 0, 0]
+            self.betted_count[s] = 0
         self.crt_step = 'Bet'
+
         if self.gr > 0:
             self.gr -= 1
-
             if self.nre == '下次一定':
                 self.nre = None
                 event1, event2 = sample(sorted(EVENTS), 2)
@@ -214,12 +215,11 @@ class Game:
                 self.do_event(round_event)
                 self.event_text.set(f'The event of this round is {round_event}!')
                 self.event_meaning_text.set(f'{round_event}：{EVENTS[round_event]}')
-            self.show_pts()
+            self.song()
         else:
             self.game_end()
 
     def do_event(self, event_name):
-
         if event_name == '绝对优势':
             for s in self.pl:
                 self.pts[s] = abs(self.pts[s])
@@ -247,7 +247,7 @@ class Game:
 
     def song(self):
         new_song = sample(SONGS, counts=WEIGHTS, k=1)[0]
-        self.song_text.set(f'The song of this round is {new_song}!')
+        self.song_text.set('The song of this round is %s, difficulty %.1f!' % new_song)
 
     def bet(self):
         assert self.crt_step == 'Bet' or self.crt_step == 'Play'
@@ -273,198 +273,248 @@ class Game:
         values = tk.Frame(bw)
         values_name = tk.Label(values, text='Values')
         values_name.pack(side='left')
-        values_spinbox = tk.Spinbox(values, values=list(range(1, self.pn + 1)), wrap=True, width=4)
+        values_spinbox = tk.Spinbox(values, values=list(range(self.pn + 1)), wrap=True, width=4)
         values_spinbox.pack(side='left')
         values.pack(side='top')
 
         sure_btn = tk.Button(bw, text='Sure', command=lambda: self.bet_sure(subject_spinbox, object_spinbox, values_spinbox))
+        # sure_btn = tk.Button(bw, text='Sure', command=lambda: (self.bet_sure(subject_spinbox, object_spinbox, values_spinbox), bw.destroy()))
         sure_btn.pack(side='top')
-
         bw.mainloop()
 
     def bet_sure(self, ss, os, value):
+        error_code = None
         sp = ss.get()
         op = os.get()
-        value = int(value.get())
-        assert sp != op
-        self.bets[sp] = (op, value)
+        if sp not in self.pl:
+            error_code = 'Name'
+        vl = int(value.get())
+        if vl == 0:
+            op = 'None'
+        elif op not in self.pl:
+            error_code = 'Name'
+        if sp == op:
+            error_code = 'Same'
+
+        if error_code == 'Name':
+            self.raise_error("Please input a correct player name!")
+        elif error_code == 'Same':
+            self.raise_error("You cannot bet on yourself in this game!")
+        else:
+            self.bets[sp] = (op, vl)
 
     def play_end(self):
         assert self.crt_step == 'Play' or self.crt_step == 'Result'
         self.crt_step = 'Result'
-        pw = tk.Tk()
-        pw.title('Bet Shift')
-        pw.geometry('400x100+400+300')
+        not_bet_list = []
+        for s in self.pl:
+            if self.bets[s] is None:
+                not_bet_list.append(s)
+        if not_bet_list:
+            self.raise_error(f"These following players haven't bet: {', '.join(s for s in not_bet_list)}")
+        else:
+            pw = tk.Tk()
+            pw.title('Bet Shift')
+            pw.geometry('400x100+400+300')
 
-        player = tk.Frame(pw)
-        player_name = tk.Label(player, text='Your name: ')
-        player_name.pack(side='left')
-        player_spinbox = tk.Spinbox(player, values=self.pl, wrap=True, width=20)
-        player_spinbox.pack(side='left')
-        player.pack(side='top')
+            player = tk.Frame(pw)
+            player_name = tk.Label(player, text='Your name: ')
+            player_name.pack(side='left')
+            player_spinbox = tk.Spinbox(player, values=self.pl, wrap=True, width=20)
+            player_spinbox.pack(side='left')
+            player.pack(side='top')
 
-        points = tk.Frame(pw)
-        points_name = tk.Label(points, text='Your Score: ')
-        points_name.pack(side='left')
-        points_entry = tk.Entry(points)
-        points_entry.pack(side='left')
-        points.pack(side='top')
+            points = tk.Frame(pw)
+            points_name = tk.Label(points, text='Your Score: ')
+            points_name.pack(side='left')
+            points_entry = tk.Entry(points)
+            points_entry.pack(side='left')
+            points.pack(side='top')
 
-        sure_btn = tk.Button(pw, text='Sure', command=lambda: self.pe_sure(player_spinbox, points_entry))
-        sure_btn.pack(side='top')
-
-        pw.mainloop()
+            sure_btn = tk.Button(pw, text='Sure', command=lambda: self.pe_sure(player_spinbox, points_entry))
+            sure_btn.pack(side='top')
+            pw.mainloop()
 
     def pe_sure(self, ps, pe):
-        player_ = ps.get()
-        pnts = float(pe.get())
-        self.result[player_] = pnts
+        try:
+            player_ = ps.get()
+            if player_ not in self.pl:
+                raise NameError
+            pts = float(pe.get())  # pts = points
+            if pts < 0 or pts > 1000000:
+                raise ValueError
+            self.result[player_] = pts
+        except NameError:
+            self.raise_error("Please input a correct player name!")
+        except ValueError:
+            self.raise_error("Please input a correct Phigros score!")
 
     def round_end(self):
         assert self.crt_step == 'Result'
-        # play result
-
-        player_list = list(self.pl)
-        player_list.sort(key=lambda x: self.result[x], reverse=True)
-        if self.poe == '赢家通吃':
-            self.pts[player_list[0]] += ceil(self.pn / 2)
-            self.report[player_list[0]][0] = ceil(self.pn / 2)
-        elif self.poe == '正态分布':
-            if self.pn % 2:
-                add_list = [min(i, self.pn - i - 1) for i in range(self.pn)]
+        not_played_list = []
+        for s in self.pl:
+            if self.result[s] is None:
+                not_played_list.append(s)
+        if not_played_list:
+            self.raise_error(f"These following players didn't finish playing: {', '.join(s for s in not_played_list)}")
+        else:
+            # play result
+            player_list = list(self.pl)
+            player_list.sort(key=lambda x: self.result[x], reverse=True)
+            if self.poe == '赢家通吃':
+                self.pts[player_list[0]] += ceil(self.pn / 2)
+                self.report[player_list[0]][0] = ceil(self.pn / 2)
+            elif self.poe == '正态分布':
+                if self.pn % 2:
+                    add_list = [min(i, self.pn - i - 1) for i in range(self.pn)]
+                else:
+                    add_list = [min(i + 1, self.pn - i) for i in range(self.pn)]
+                for i in range(self.pn):
+                    self.pts[player_list[i]] += add_list[i]
+                    self.report[player_list[i]][0] = add_list[i]
             else:
-                add_list = [min(i + 1, self.pn - i) for i in range(self.pn)]
-            for i in range(self.pn):
-                self.pts[player_list[i]] += add_list[i]
-                self.report[player_list[i]][0] = add_list[i]
-        else:
-            for i in range(int(self.pn / 2) + 1):
-                add_point = max(ceil(self.pn / 2) - i, 0)
-                self.pts[player_list[i]] += add_point
-                self.report[player_list[i]][0] = add_point
+                for i in range(int(self.pn / 2) + 1):
+                    add_point = max(ceil(self.pn / 2) - i, 0)
+                    self.pts[player_list[i]] += add_point
+                    self.report[player_list[i]][0] = add_point
+            self.poe = None
 
-        self.poe = None
+            # bet point
+            if self.bte != '不必犹豫':
+                for v in self.bets.values():
+                    bet_object_name = v[0]
+                    if bet_object_name != 'None':
+                        self.pts[bet_object_name] -= 1
+                        self.report[bet_object_name][1] -= 1
 
-        # bet point
+            # Temp point
+            highest_point = -float('inf')
+            temp_winner = []
+            for s in self.pl:
+                self.report[s][2] = self.pts[s]
+                if self.pts[s] > highest_point:
+                    highest_point = self.pts[s]
+                    temp_winner = [s]
+                elif self.pts[s] == highest_point:
+                    temp_winner.append(s)
 
-        if self.bte != '不必犹豫':
+            # bet result
+
+            if self.bte == '福利时间':
+                for k, v in self.bets.items():
+                    if v[0] in temp_winner:
+                        self.report[k][3] += (2 * v[1])
+                        self.pts[k] += (2 * v[1])
+                    elif v[0] != 'None':
+                        self.report[k][3] -= (2 * v[1])
+                        self.pts[k] -= (2 * v[1])
+            elif self.bte == '风险规避':
+                for k, v in self.bets.items():
+                    if v[0] in temp_winner:
+                        self.report[k][3] += v[1]
+                        self.pts[k] += v[1]
+            else:
+                for k, v in self.bets.items():
+                    if v[0] in temp_winner:
+                        self.report[k][3] += v[1]
+                        self.pts[k] += v[1]
+                    elif v[0] != 'None':
+                        self.report[k][3] -= v[1]
+                        self.pts[k] -= v[1]
+
+            self.bte = None
+
+            # Event point
             for v in self.bets.values():
-                bet_object_name = v[0]
-                if bet_object_name != 'None':
-                    self.pts[bet_object_name] -= 1
-                    self.report[bet_object_name][1] -= 1
+                if v[0] != 'None':
+                    self.betted_count[v[0]] += 1
 
-        # Temp point
-        highest_point = -float('inf')
-        temp_winner = []
-        for s in self.pl:
-            self.report[s][2] = self.pts[s]
-            if self.pts[s] > highest_point:
-                highest_point = self.pts[s]
-                temp_winner = [s]
-            elif self.pts[s] == highest_point:
-                temp_winner.append(s)
+            if self.ree == '交通事故':
+                for s in self.pl:
+                    if self.bets[s][0] != 'None':
+                        if self.betted_count[self.bets[s][0]] >= 1:
+                            self.pts[s] -= (self.betted_count[self.bets[s][0]] - 1)
+                            self.report[s][4] -= (self.betted_count[self.bets[s][0]] - 1)
 
-        # bet result
+            if self.ree == '人气选手':
+                max_player = []
+                max_bet = 0
+                for s in self.pl:
+                    if self.betted_count[s] > max_bet:
+                        max_player = [s]
+                        max_bet = self.betted_count[s]
+                    elif self.betted_count == max_bet:
+                        max_player.append(s)
 
-        if self.bte == '福利时间':
-            for k, v in self.bets.items():
-                if v[0] in temp_winner:
-                    self.report[k][3] += (2 * v[1])
-                    self.pts[k] += (2 * v[1])
-                elif v[0] != 'None':
-                    self.report[k][3] -= (2 * v[1])
-                    self.pts[k] -= (2 * v[1])
-        elif self.bte == '风险规避':
-            for k, v in self.bets.items():
-                if v[0] in temp_winner:
-                    self.report[k][3] += v[1]
-                    self.pts[k] += v[1]
-        else:
-            for k, v in self.bets.items():
-                if v[0] in temp_winner:
-                    self.report[k][3] += v[1]
-                    self.pts[k] += v[1]
-                elif v[0] != 'None':
-                    self.report[k][3] -= v[1]
-                    self.pts[k] -= v[1]
+                for s in max_player:
+                    self.report[s][4] += (2 * max_bet)
+                    self.pts[s] += (2 * max_bet)
 
-        self.bte = None
+            if self.ree == '你先别急':
+                print(self.pts)
+                min_player = []
+                min_pts = float('inf')
+                for s in self.pl:
+                    if self.pts[s] < min_pts:
+                        min_player = [s]
+                        min_pts = self.pts[s]
+                    elif self.pts[s] == min_pts:
+                        min_player.append(s)
+                for s in min_player:
+                    self.report[s][4] += self.pn
+                    self.pts[s] += self.pn
+            self.ree = None
+            self.crt_step = 'Event'
 
-        # Event point
-
-        for v in self.bets.values():
-            if v[0] != 'None':
-                self.betted_count[v[0]] += 1
-
-        if self.ree == '交通事故':
+            # show point difference
             for s in self.pl:
-                if self.bets[s][0] != 'None':
-                    if self.betted_count[self.bets[s][0]] >= 1:
-                        self.pts[s] -= (self.betted_count[self.bets[s][0]] - 1)
-                        self.report[s][4] -= (self.betted_count[self.bets[s][0]] - 1)
+                self.report[s][5] = self.pts[s]
 
-        if self.ree == '人气选手':
-            max_player = []
-            max_bet = 0
-            for s in self.pl:
-                if self.betted_count[s] > max_bet:
-                    max_player = [s]
-                    max_bet = self.betted_count[s]
-                elif self.betted_count == max_bet:
-                    max_player.append(s)
+            ps = tk.Tk()
+            ps.title('Points Show')
 
-            for s in max_player:
-                self.report[s][4] += (2 * max_bet)
-                self.pts[s] += (2 * max_bet)
+            # Result show
+            result_frame = tk.Frame(ps)
+            result_hint = tk.Label(ps, text='Bet and playing information: ')
+            result_hint.pack(side='top')
+            title = ['Player Name', 'Play Result', 'Bet Object', 'Bet Points']
+            for t in range(4):
+                sheet = tk.Label(result_frame, text=title[t])
+                sheet.grid_configure(row=(t + 1), column=1)
+            for i in range(self.pn):
+                s = self.pl[i]
+                c = i + 2
+                name = tk.Label(result_frame, text=s)
+                name.grid_configure(row=1, column=c)
+                play_result = tk.Label(result_frame, text=self.result[s])
+                play_result.grid_configure(row=2, column=c)
+                bet_object = tk.Label(result_frame, text=self.bets[s][0])
+                bet_object.grid_configure(row=3, column=c)
+                bet_point = tk.Label(result_frame, text=self.bets[s][1])
+                bet_point.grid_configure(row=4, column=c)
+            result_frame.pack(side='top')
 
-        if self.ree == '你先别急':
-            print(self.pts)
-            min_player = []
-            min_pts = float('inf')
-            for s in self.pl:
-                if self.pts[s] < min_pts:
-                    min_player = [s]
-                    min_pts = self.pts[s]
-                elif self.pts[s] == min_pts:
-                    min_player.append(s)
-            for s in min_player:
-                self.report[s][4] += self.pn
-                self.pts[s] += self.pn
+            # Point Frame
+            point_frame = tk.Frame(ps)
+            point_hint = tk.Label(ps, text='Point difference in the round: ')
+            point_hint.pack(side='top')
+            title = ['Player\nName', 'Play\nResult', 'Betted\nPoint', 'Temp\nPoint', 'Bet\nResult', 'Event\nPoint', 'Total\nPoint']
+            for t in range(7):
+                sheet = tk.Label(point_frame, text=title[t])
+                sheet.grid_configure(row=3, column=(t + 1))
+            for i in range(self.pn):
+                s = self.pl[i]
+                r = i + 4
+                name = tk.Label(point_frame, text=s)
+                name.grid_configure(row=r, column=1)
+                for j in range(6):
+                    sheet = tk.Label(point_frame, text=self.report[s][j])
+                    sheet.grid_configure(row=r, column=(j + 2))
+            point_frame.pack(side='top')
 
-        self.ree = None
-
-        self.crt_step = 'Event'
-
-        # show point difference
-
-        for s in self.pl:
-            self.report[s][5] = self.pts[s]
-
-        ps = tk.Tk()
-        ps.title('Points Show')
-
-        text_hint_1 = tk.Label(ps, text=f'Betting Situation: {self.bets}')
-        text_hint_1.grid_configure(row=1, column=1, columnspan=7)
-        text_hint_2 = tk.Label(ps, text=f'Play Result: {self.result}')
-        text_hint_2.grid_configure(row=2, column=1, columnspan=7)
-
-        title = ['Player\nName', 'Play\nResult', 'Betted\nPoint', 'Temp\nPoint', 'Bet\nResult', 'Event\nPoint', 'Total\nPoint']
-        for t in range(7):
-            sheet = tk.Label(ps, text=title[t])
-            sheet.grid_configure(row=3, column=(t + 1))
-        for i in range(self.pn):
-            name = tk.Label(ps, text=self.pl[i])
-            name.grid_configure(row=(i + 4), column=1)
-            assert len(self.report[self.pl[0]]) == 6
-            for j in range(6):
-                sheet = tk.Label(ps, text=self.report[self.pl[i]][j])
-                sheet.grid_configure(row=(i + 4), column=(j + 2))
-
-        sure_button = tk.Button(ps, text='Sure', command=ps.destroy)
-        sure_button.grid_configure(row=(4 + self.pn), column=4)
-
-        ps.mainloop()
+            sure_button = tk.Button(ps, text='Sure', command=ps.destroy)
+            sure_button.pack(side='top')
+            ps.mainloop()
 
     def game_end(self):
         self.show_pts()
